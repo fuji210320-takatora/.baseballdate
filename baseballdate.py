@@ -16,11 +16,10 @@ def load_data():
   gid_pitcher = "249999559"  # シート2（投手）
   gid_batter = "729396171"  # シート3（野手）
 
-  url_base = (
-      f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_base}"
-  )
-  url_pitcher = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_pitcher}"
-  url_batter = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=csv&gid={gid_batter}"
+  # gviz/tq エンドポイントを使用
+  url_base = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid_base}"
+  url_pitcher = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid_pitcher}"
+  url_batter = f"https://docs.google.com/spreadsheets/d/{sheet_id}/gviz/tq?tqx=out:csv&gid={gid_batter}"
 
   df_base = pd.read_csv(url_base)
   df_pitcher = pd.read_csv(url_pitcher)
@@ -68,21 +67,18 @@ def format_value(col_name, val):
 
   col_str = str(col_name)
 
-  # wRCなど、整数表示にしたい指標
-  if col_str == "wRC" or "wRC" in col_str:
+  # wRCやwRC+など、整数表示にしたい指標
+  if col_str == "wRC" or col_str == "wRC+" or "wRC" in col_str:
     return f"{round(num)}"
 
-  # 防御率
-  if "防御率" in col_str:
+  # 防御率・WHIP・FIP（小数点第2位まで）
+  if "防御率" in col_str or "WHIP" in col_str or "FIP" in col_str:
     return f"{num:.2f}"
 
-  # wOBA、打率、出塁率、長打率、OPS、WHIPなどの率系・小数系
-  is_rate_col = any(kw in col_str for kw in ["wOBA", "打率", "出塁率", "長打率", "OPS", "WHIP", "防御率"])
+  # wOBA、打率、出塁率、長打率、OPS、勝率、BABIPなどの率系・小数系
+  is_rate_col = any(kw in col_str for kw in ["wOBA", "打率", "出塁率", "長打率", "OPS", "勝率", "BABIP"])
 
   if is_rate_col:
-    if "防御率" in col_str or "WHIP" in col_str:
-      return f"{num:.2f}"
-    
     if num >= 1.0:
       return f"{num:.3f}"
     else:
@@ -107,6 +103,13 @@ except Exception as e:
 
 # --- サイドバー：条件設定 ---
 st.sidebar.header("🔍 検索・絞り込み条件")
+
+# キャッシュクリア＆再読み込みボタン
+if st.sidebar.button("🔄 データを最新に更新（キャッシュクリア）"):
+  st.cache_data.clear()
+  st.success("キャッシュをクリアしました！")
+  st.rerun()
+
 player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成績"])
 
 # データの結合
@@ -291,7 +294,7 @@ if player_type == "野手成績":
   default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS"]
   default_sort_col = "安打"
 else:
-  default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "ホールド", "セーブ", "奪三振", "WHIP"]
+  default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "ホールド", "セーブ", "奪三振", "WHIP", "FIP"]
   default_sort_col = "投球回"
 
 default_selected = [c for c in default_selected if c in all_cols]
@@ -327,7 +330,6 @@ def get_team_sort_key(val, is_ascending):
   val_str = str(val)
   for idx, t in enumerate(team_order_desc):
     if t in val_str:
-      # 昇順の場合は逆向きのインデックスにする
       return idx if not is_ascending else (len(team_order_desc) - 1 - idx)
   return 999
 
