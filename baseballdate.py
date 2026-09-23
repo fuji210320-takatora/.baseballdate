@@ -86,6 +86,11 @@ def load_data():
                     cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置", "nan"]
                     df_pos = df_pos.drop(columns=[c for c in cols_to_drop if c in df_pos.columns])
 
+                    # 【新規追加】データが全員分「空っぽ」の列（例: RFシートにあるSS列など）を完全に削除する
+                    # スペースやハイフンしかないセルも一旦NaNとみなして、列ごと消し去ります
+                    df_pos = df_pos.replace([r'^\s*$', r'^\s*-\s*$', 'NaN', 'nan'], pd.NA, regex=True)
+                    df_pos = df_pos.dropna(axis=1, how='all')
+
                     # 「選手名」以外の列名に(1B)などの英字ポジション名を付ける
                     rename_dict = {}
                     for col in df_pos.columns:
@@ -357,7 +362,7 @@ st.markdown("### ⚙️ 表示・並び替え設定")
 all_cols = [c for c in filtered_df.columns if c != "__西暦"]
 
 if player_type == "野手成績":
-    # デフォルトの選択肢から sUZR(まとめ) を削除
+    # デフォルトの選択肢
     default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV(まとめ)"]
     default_sort_col = "安打"
 else:
