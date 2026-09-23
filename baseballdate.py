@@ -54,21 +54,18 @@ def load_data():
                     name_col = df_pos.columns[0]
                 
                 if name_col:
-                    # 「中島大輔Nakashima Daisuke」のような形式から日本語（漢字・かな）部分を抽出する
-                    # 例: アルファベットや記号を除外して氏名だけにする、またはローマ字の手前でスライスする
-                    def clean_player_name(val):
+                    # 「中島大輔Nakashima Daisuke」からアルファベット部分を除去し、スペースも排除する
+                    def clean_defense_name(val):
                         if pd.isna(val):
                             return ""
                         val_str = str(val).strip()
-                        # 最初に出現するアルファベットの手前までを抽出（例: Nakashima の前まで）
-                        # または漢字・ひらがな・カタカナ部分だけを残す
-                        match = re.split(r'[A-Za-z]', val_str)
-                        if match and match[0]:
-                            return match[0].strip()
-                        return val_str
+                        # 最初に出現するアルファベット（半角・全角英字）より前を切り出す
+                        match = re.split(r'[A-Za-zＡ-Ｚａ-ｚ]', val_str)
+                        jp_part = match[0] if match else val_str
+                        # 漢字・かな・カタカナ以外の空白や記号も全て削除
+                        return re.sub(r'\s+', '', jp_part)
 
-                    df_pos["選手名"] = df_pos[name_col].apply(clean_player_name)
-                    # 元の選手名列が重複しないようにリネームまたはドロップ
+                    df_pos["選手名"] = df_pos[name_col].apply(clean_defense_name)
                     if name_col != "選手名":
                         df_pos = df_pos.drop(columns=[name_col])
 
@@ -79,7 +76,6 @@ def load_data():
     # 守備データを統合
     if defense_dfs:
         df_defense_all = pd.concat(defense_dfs, ignore_index=True)
-        # 同一選手が複数ポジションにある場合の重複対策（必要に応じて最初のデータを保持）
         df_defense_all = df_defense_all.drop_duplicates(subset=["選手名"], keep="first")
     else:
         df_defense_all = pd.DataFrame()
@@ -90,13 +86,13 @@ def load_data():
     df_pitcher = df_pitcher.rename(columns={df_pitcher.columns[1]: "選手名"})
     df_batter = df_batter.rename(columns={df_batter.columns[1]: "選手名"})
 
-    # 選手名の前後の空白などを綺麗にしておく
+    # --- 基本・投手・野手側の選手名のスペースもすべて削除して統一する ---
     for df in [df_base, df_pitcher, df_batter]:
         if "選手名" in df.columns:
-            df["選手名"] = df["選手名"].astype(str).str.replace(r"\s+", "", regex=True)
+            df["選手名"] = df["選手名"].astype(str).str.replace(r'\s+', '', regex=True)
     
     if not df_defense_all.empty and "選手名" in df_defense_all.columns:
-        df_defense_all["選手名"] = df_defense_all["選手名"].astype(str).str.replace(r"\s+", "", regex=True)
+        df_defense_all["選手名"] = df_defense_all["選手名"].astype(str).str.replace(r'\s+', '', regex=True)
 
     # --- 「年齢」の数値化 ---
     if "年齢" in df_base.columns:
@@ -134,19 +130,15 @@ def format_value(col_name, val):
 
     col_str = str(col_name)
 
-    # wRCやwRC+など、整数表示にしたい指標
     if col_str == "wRC" or col_str == "wRC+" or "wRC" in col_str:
         return f"{round(num)}"
 
-    # 防御率・WHIP・FIP（小数点第2位まで）
     if "防御率" in col_str or "WHIP" in col_str or "FIP" in col_str:
         return f"{num:.2f}"
 
-    # Fielding RV や sUZR など（小数点第1位）
     if "Fielding" in col_str or "sUZR" in col_str or "RV" in col_str:
         return f"{num:.1f}"
 
-    # wOBA、打率、出塁率、長打率、OPS、勝率、BABIPなどの率系・小数系
     is_rate_col = any(kw in col_str for kw in ["wOBA", "打率", "出塁率", "長打率", "OPS", "勝率", "BABIP", "試行率"])
 
     if is_rate_col:
@@ -175,7 +167,6 @@ except Exception as e:
 # --- サイドバー：条件設定 ---
 st.sidebar.header("🔍 検索・絞り込み条件")
 
-# キャッシュクリア＆再読み込みボタン
 if st.sidebar.button("🔄 データを最新に更新（キャッシュクリア）"):
     st.cache_data.clear()
     st.success("キャッシュをクリアしました！")
@@ -187,7 +178,6 @@ player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成
 if player_type == "投手成績":
     df_merged = pd.merge(df_base, df_pitcher, on="選手名", how="inner")
 else:
-    # 野手成績の場合は、基本データ + 野手データ + 守備データを結合
     df_temp = pd.merge(df_base, df_batter, on="選手名", how="inner")
     if not df_defense.empty:
         df_merged = pd.merge(df_temp, df_defense, on="選手名", how="left")
@@ -195,11 +185,8 @@ else:
         df_merged = df_temp
 
 st.sidebar.markdown("---")
-st.sidebar.markdown(
-    "💡 **各項目の結合方法（AND / OR）を個別に指定できます**"
-)
+st.sidebar.markdown("💡 **各項目の結合方法（AND / OR）を個別に指定できます**")
 
-# リスト管理用のグループ
 condition_groups = []
 
 # --- 1. チーム条件 ---
@@ -346,7 +333,6 @@ if condition_groups:
             or_combined = or_combined | m
         filtered_df = filtered_df[or_combined]
 
-# 規定数チェックの適用
 if player_type == "野手成績":
     if use_min_pa and "打席数" in filtered_df.columns:
         filtered_df = filtered_df[pd.to_numeric(filtered_df["打席数"], errors="coerce") >= min_pa_val]
@@ -365,7 +351,6 @@ else:
 st.markdown("### ⚙️ 表示・並び替え設定")
 all_cols = [c for c in filtered_df.columns if c != "__西暦"]
 
-# カテゴリに応じたデフォルト選択項目と初期ソート項目
 if player_type == "野手成績":
     default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV", "sUZR"]
     default_sort_col = "安打"
@@ -396,7 +381,6 @@ with col_s2:
     sort_order_2 = st.radio("順序 (2)", ["降順（高い順・大きい順）", "昇順（低い順・小さい順）"], horizontal=True, key="sort_o2")
     use_second_sort = st.checkbox("第2ソートを有効にする", value=False, key="use_s2")
 
-# --- チームのカスタム順序定義 ---
 team_order_desc = [
     "阪神", "ＤｅＮＡ", "DeNA", "巨人", "中日", "広島", "ヤクルト",
     "ソフトバンク", "日本ハム", "オリックス", "楽天", "西武", "ロッテ"
@@ -409,7 +393,6 @@ def get_team_sort_key(val, is_ascending):
             return idx if not is_ascending else (len(team_order_desc) - 1 - idx)
     return 999
 
-# --- 並び替えの適用 ---
 if sort_target_1 and not filtered_df.empty:
     sort_cols = []
     ascending_list = []
