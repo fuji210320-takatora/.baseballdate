@@ -7,15 +7,13 @@ st.set_page_config(page_title="選手成績検索システム", layout="wide")
 
 st.title("⚾ 2026年 選手成績・データ検索システム")
 
-
 # データの読み込み関数
 @st.cache_data
 def load_data():
-    # 既存のスプレッドシート（基本・投手・野手）
     sheet_id_base = "1I1JsaaQlYHj1zIsOKkFWkc1yAuoNDnpVdy_pLNW5na8"
-    gid_base = "0"          # シート1（基本データ）
-    gid_pitcher = "249999559"  # シート2（投手）
-    gid_batter = "729396171"   # シート3（野手）
+    gid_base = "0"          
+    gid_pitcher = "249999559"  
+    gid_batter = "729396171"   
 
     url_base = f"https://docs.google.com/spreadsheets/d/{sheet_id_base}/gviz/tq?tqx=out:csv&gid={gid_base}"
     url_pitcher = f"https://docs.google.com/spreadsheets/d/{sheet_id_base}/gviz/tq?tqx=out:csv&gid={gid_pitcher}"
@@ -44,7 +42,9 @@ def load_data():
         try:
             df_pos = pd.read_csv(url_def)
             if not df_pos.empty:
-                # 選手名カラムの特定（基本的には左端にあると想定）
+                # 【重要追加】カラム名に含まれる「↕」「▼」「▲」などの記号を削除
+                df_pos.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pos.columns]
+
                 name_col = None
                 for col in df_pos.columns:
                     if "選手" in str(col):
@@ -54,15 +54,13 @@ def load_data():
                     name_col = df_pos.columns[0]
                 
                 if name_col:
-                    # 「中島大輔Nakashima Daisuke」からアルファベット部分を除去し、スペースも排除する
                     def clean_defense_name(val):
                         if pd.isna(val):
                             return ""
                         val_str = str(val).strip()
-                        # 最初に出現するアルファベット（半角・全角英字）より前を切り出す
+                        # 最初に出現するアルファベットより前を切り出し、スペースを削除
                         match = re.split(r'[A-Za-zＡ-Ｚａ-ｚ]', val_str)
                         jp_part = match[0] if match else val_str
-                        # 漢字・かな・カタカナ以外の空白や記号も全て削除
                         return re.sub(r'\s+', '', jp_part)
 
                     df_pos["選手名"] = df_pos[name_col].apply(clean_defense_name)
@@ -76,10 +74,10 @@ def load_data():
     # 守備データを統合
     if defense_dfs:
         df_defense_all = pd.concat(defense_dfs, ignore_index=True)
-        # 同一選手が複数ポジションにある場合の重複対策（必要に応じて最初のデータを保持）
+        # 同一選手が複数ポジションにある場合の重複対策
         df_defense_all = df_defense_all.drop_duplicates(subset=["選手名"], keep="first")
         
-        # もし守備データ側に不要な列（例えば守備位置や年数など、ベースデータと重複するもの）があれば削除しておく
+        # 重複する不要な列を削除
         cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置"]
         df_defense_all = df_defense_all.drop(columns=[c for c in cols_to_drop if c in df_defense_all.columns])
     else:
@@ -87,11 +85,10 @@ def load_data():
 
     # シート1：C列が選手名（インデックス2）
     df_base = df_base.rename(columns={df_base.columns[2]: "選手名"})
-    # シート2・3：B列が選手名（インデックス1）
     df_pitcher = df_pitcher.rename(columns={df_pitcher.columns[1]: "選手名"})
     df_batter = df_batter.rename(columns={df_batter.columns[1]: "選手名"})
 
-    # --- 基本・投手・野手側の選手名のスペースもすべて削除して統一する ---
+    # --- 基本・投手・野手側の選手名のスペースもすべて削除して統一 ---
     for df in [df_base, df_pitcher, df_batter]:
         if "選手名" in df.columns:
             df["選手名"] = df["選手名"].astype(str).str.replace(r'\s+', '', regex=True)
@@ -99,35 +96,20 @@ def load_data():
     if not df_defense_all.empty and "選手名" in df_defense_all.columns:
         df_defense_all["選手名"] = df_defense_all["選手名"].astype(str).str.replace(r'\s+', '', regex=True)
 
-    # --- 「年齢」の数値化 ---
     if "年齢" in df_base.columns:
-        df_base["年齢"] = (
-            df_base["年齢"]
-            .astype(str)
-            .str.replace("歳", "", regex=False)
-            .str.strip()
-        )
+        df_base["年齢"] = df_base["年齢"].astype(str).str.replace("歳", "", regex=False).str.strip()
         df_base["年齢"] = pd.to_numeric(df_base["年齢"], errors="coerce")
 
-    # --- 「年数」の数値化 ---
     if "年数" in df_base.columns:
-        df_base["年数"] = (
-            df_base["年数"]
-            .astype(str)
-            .str.replace("年目", "", regex=False)
-            .str.replace("年", "", regex=False)
-            .str.strip()
-        )
+        df_base["年数"] = df_base["年数"].astype(str).str.replace("年目", "", regex=False).str.replace("年", "", regex=False).str.strip()
         df_base["年数"] = pd.to_numeric(df_base["年数"], errors="coerce")
 
     return df_base, df_pitcher, df_batter, df_defense_all
 
 
-# 数値を見やすくフォーマットする関数
 def format_value(col_name, val):
     if pd.isna(val):
         return val
-     
     try:
         num = float(val)
     except (ValueError, TypeError):
@@ -137,15 +119,12 @@ def format_value(col_name, val):
 
     if col_str == "wRC" or col_str == "wRC+" or "wRC" in col_str:
         return f"{round(num)}"
-
     if "防御率" in col_str or "WHIP" in col_str or "FIP" in col_str:
         return f"{num:.2f}"
-
     if "Fielding" in col_str or "sUZR" in col_str or "RV" in col_str:
         return f"{num:.1f}"
 
     is_rate_col = any(kw in col_str for kw in ["wOBA", "打率", "出塁率", "長打率", "OPS", "勝率", "BABIP", "試行率"])
-
     if is_rate_col:
         if num >= 1.0:
             return f"{num:.3f}"
@@ -160,18 +139,13 @@ def format_value(col_name, val):
     return val
 
 
-# データのロード
 try:
     df_base, df_pitcher, df_batter, df_defense = load_data()
 except Exception as e:
-    st.error(
-        f"データの読み込みに失敗しました。スプレッドシートの共有設定や内容を確認してください。\nエラー内容: {e}"
-    )
+    st.error(f"データの読み込みに失敗しました。\nエラー内容: {e}")
     st.stop()
 
-# --- サイドバー：条件設定 ---
 st.sidebar.header("🔍 検索・絞り込み条件")
-
 if st.sidebar.button("🔄 データを最新に更新（キャッシュクリア）"):
     st.cache_data.clear()
     st.success("キャッシュをクリアしました！")
@@ -179,12 +153,9 @@ if st.sidebar.button("🔄 データを最新に更新（キャッシュクリ�
 
 player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成績"])
 
-# データの結合
 if player_type == "投手成績":
     df_merged = pd.merge(df_base, df_pitcher, on="選手名", how="inner")
 else:
-    # 野手成績の場合は、基本データ + 野手データ + 守備データを結合
-    # how="left" とすることで、ベースの野手は必ず残り、守備データがある人だけ結合される
     df_temp = pd.merge(df_base, df_batter, on="選手名", how="inner")
     if not df_defense.empty:
         df_merged = pd.merge(df_temp, df_defense, on="選手名", how="left")
@@ -196,7 +167,6 @@ st.sidebar.markdown("💡 **各項目の結合方法（AND / OR）を個別に�
 
 condition_groups = []
 
-# --- 1. チーム条件 ---
 if "チーム" in df_merged.columns:
     st.sidebar.subheader("⚾ チーム")
     teams = list(df_merged["チーム"].dropna().unique())
@@ -206,18 +176,14 @@ if "チーム" in df_merged.columns:
         m = df_merged["チーム"].isin(selected_teams)
         condition_groups.append((m, "AND" if "AND" in team_logic else "OR"))
 
-# --- 2. 選手名条件 ---
 st.sidebar.subheader("👤 選手名")
 search_name = st.sidebar.text_input("選手名（部分一致）", "", key="m_name")
 name_logic = st.sidebar.radio("選手名の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_name", horizontal=True)
 if search_name:
-    # スペースを取り除いた検索クエリで比較（ユーザーがスペースを入れて検索してもヒットしやすくする）
     clean_search = search_name.replace(" ", "").replace(" ", "")
     m = df_merged["選手名"].str.contains(clean_search, na=False)
     condition_groups.append((m, "AND" if "AND" in name_logic else "OR"))
 
-# --- (中略：年齢、年数、生まれ年、出身地のサイドバー設定は省略せずにそのまま) ---
-# --- 3. 年齢条件 ---
 st.sidebar.subheader("🎂 年齢")
 use_age_input = st.sidebar.checkbox("年齢条件を有効にする", key="c_age")
 if use_age_input and "年齢" in df_merged.columns:
@@ -227,7 +193,6 @@ if use_age_input and "年齢" in df_merged.columns:
     with col_a2:
         age_val = st.number_input("歳", min_value=10, max_value=60, value=25, step=1, key="age_v")
     age_logic = st.sidebar.radio("年齢の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_age", horizontal=True)
-     
     if age_cond == "以下":
         m = df_merged["年齢"] <= age_val
     elif age_cond == "以上":
@@ -236,7 +201,6 @@ if use_age_input and "年齢" in df_merged.columns:
         m = df_merged["年齢"] == age_val
     condition_groups.append((m, "AND" if "AND" in age_logic else "OR"))
 
-# --- 4. プロ入り年数条件 ---
 st.sidebar.subheader("📅 プロ入り年数")
 use_years_input = st.sidebar.checkbox("プロ入り年数条件を有効にする", key="c_yrs")
 if use_years_input and "年数" in df_merged.columns:
@@ -246,7 +210,6 @@ if use_years_input and "年数" in df_merged.columns:
     with col_y2:
         years_val = st.number_input("年", min_value=1, max_value=30, value=5, step=1, key="yrs_v")
     years_logic = st.sidebar.radio("年数の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_yrs", horizontal=True)
-     
     if years_cond == "以下":
         m = df_merged["年数"] <= years_val
     elif years_cond == "以上":
@@ -255,7 +218,6 @@ if use_years_input and "年数" in df_merged.columns:
         m = df_merged["年数"] == years_val
     condition_groups.append((m, "AND" if "AND" in years_logic else "OR"))
 
-# --- 5. 生まれ年条件 ---
 st.sidebar.subheader("👶 生まれ年")
 use_birth_input = st.sidebar.checkbox("生まれ年条件を有効にする", key="c_birth")
 if use_birth_input:
@@ -263,27 +225,16 @@ if use_birth_input:
         df_merged["__西暦"] = df_merged["生年月日"].astype(str).str.extract(r"(\d{4})").astype(float)
     birth_year_val = st.sidebar.number_input("何年生まれ以降", min_value=1970, max_value=2010, value=2000, step=1, key="birth_v")
     birth_logic = st.sidebar.radio("生まれ年の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_birth", horizontal=True)
-     
     if "__西暦" in df_merged.columns:
         m = df_merged["__西暦"] >= birth_year_val
         condition_groups.append((m, "AND" if "AND" in birth_logic else "OR"))
 
-# --- 6. 出身条件 ---
 target_col = "出身" if "出身" in df_merged.columns else "出身地"
 st.sidebar.subheader("📍 出身地")
 use_birthplace_input = st.sidebar.checkbox("出身条件を有効にする", key="c_bp")
 if use_birthplace_input and target_col in df_merged.columns:
     bp_mode = st.sidebar.radio("方式", ["日本か海外か", "特定の地域選択"], key="bp_m")
-     
-    japan_regions = [
-        "北海道", "青森", "岩手", "宮城", "秋田", "山形", "福島", "茨城", "栃木",
-        "群馬", "埼玉", "千葉", "東京", "神奈川", "新潟", "富山", "石川", "福井",
-        "山梨", "長野", "岐阜", "静岡", "愛知", "三重", "滋賀", "京都", "大阪",
-        "兵庫", "奈良", "和歌山", "鳥取", "島根", "岡山", "広島", "山口", "徳島",
-        "香川", "愛媛", "高知", "福岡", "佐賀", "長崎", "熊本", "大分", "宮崎",
-        "鹿児島", "沖縄"
-    ]
-     
+    japan_regions = ["北海道", "青森", "岩手", "宮城", "秋田", "山形", "福島", "茨城", "栃木", "群馬", "埼玉", "千葉", "東京", "神奈川", "新潟", "富山", "石川", "福井", "山梨", "長野", "岐阜", "静岡", "愛知", "三重", "滋賀", "京都", "大阪", "兵庫", "奈良", "和歌山", "鳥取", "島根", "岡山", "広島", "山口", "徳島", "香川", "愛媛", "高知", "福岡", "佐賀", "長崎", "熊本", "大分", "宮崎", "鹿児島", "沖縄"]
     if bp_mode == "日本か海外か":
         sel_jo = st.sidebar.selectbox("区分", ["日本国内", "日本以外（海外）"], key="bp_jo")
         if sel_jo == "日本国内":
@@ -294,19 +245,15 @@ if use_birthplace_input and target_col in df_merged.columns:
         bp_list = sorted(list(df_merged[target_col].dropna().unique()))
         sel_bp = st.sidebar.selectbox("地域を選択", bp_list, key="bp_sel")
         m = df_merged[target_col] == sel_bp
-         
     bp_logic = st.sidebar.radio("出身の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_bp", horizontal=True)
     condition_groups.append((m, "AND" if "AND" in bp_logic else "OR"))
 
-
-# --- 7. 成績ベースの絞り込み ---
 st.sidebar.subheader("📊 規定数・ポジション絞り込み")
 if player_type == "野手成績":
     use_min_pa = st.sidebar.checkbox("打席数で絞り込む")
     min_pa_val = st.sidebar.number_input("最小打席数", min_value=1, max_value=700, value=100, step=1)
     use_min_g_bat = st.sidebar.checkbox("試合数で絞り込む（野手）")
     min_g_bat_val = st.sidebar.number_input("最小試合数（野手）", min_value=1, max_value=150, value=20, step=1)
-     
     use_pos_filter = st.sidebar.checkbox("守備位置で絞り込む", key="c_pos")
     if use_pos_filter:
         pos_col = None
@@ -314,7 +261,6 @@ if player_type == "野手成績":
             if candidate in df_merged.columns:
                 pos_col = candidate
                 break
-         
         if pos_col:
             positions = sorted([p for p in df_merged[pos_col].dropna().unique() if p != "投手"])
             selected_positions = st.sidebar.multiselect("守備位置を選択（複数可）", positions, key="m_pos")
@@ -327,15 +273,12 @@ else:
     use_min_g_pit = st.sidebar.checkbox("試合数で絞り込む（投手）")
     min_g_pit_val = st.sidebar.number_input("最小試合数（投手）", min_value=1, max_value=100, value=10, step=1)
 
-
-# --- 絞り込みロジック ---
 filtered_df = df_merged.copy()
 
 if condition_groups:
     and_masks = [mask for mask, logic in condition_groups if logic == "AND"]
     for m in and_masks:
         filtered_df = filtered_df[m]
-
     or_masks = [mask for mask, logic in condition_groups if logic == "OR"]
     if or_masks:
         or_combined = or_masks[0]
@@ -356,16 +299,10 @@ else:
     if use_min_g_pit and "試合" in filtered_df.columns:
         filtered_df = filtered_df[pd.to_numeric(filtered_df["試合"], errors="coerce") >= min_g_pit_val]
 
-
-# --- メイン画面：表示項目・並び替え設定エリア ---
 st.markdown("### ⚙️ 表示・並び替え設定")
-
-# 結合後のデータフレーム（filtered_df）からカラム一覧を取得するため、
-# 守備データがマージできていれば、必ずここに「Fielding RV」などが含まれます。
 all_cols = [c for c in filtered_df.columns if c != "__西暦"]
 
 if player_type == "野手成績":
-    # 守備指標もデフォルト表示に設定
     default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV", "sUZR"]
     default_sort_col = "安打"
 else:
@@ -378,16 +315,13 @@ if not default_selected and all_cols:
 
 selected_columns = st.multiselect("表示する項目を選択（複数可）", all_cols, default=default_selected)
 
-# --- 並び替え設定 ---
 st.markdown("#### 🔄 並び替え条件")
 col_s1, col_s2 = st.columns(2)
-
 with col_s1:
     st.write("**【第1ソート】**")
     default_sort_idx = selected_columns.index(default_sort_col) if default_sort_col in selected_columns else 0
     sort_target_1 = st.selectbox("基準にする項目 (1)", selected_columns if selected_columns else all_cols, index=default_sort_idx, key="sort_t1")
     sort_order_1 = st.radio("順序 (1)", ["降順（高い順・大きい順）", "昇順（低い順・小さい順）"], horizontal=True, key="sort_o1")
-
 with col_s2:
     st.write("**【第2ソート】**")
     default_s2_idx = 1 if len(selected_columns) > 1 else 0
@@ -395,11 +329,7 @@ with col_s2:
     sort_order_2 = st.radio("順序 (2)", ["降順（高い順・大きい順）", "昇順（低い順・小さい順）"], horizontal=True, key="sort_o2")
     use_second_sort = st.checkbox("第2ソートを有効にする", value=False, key="use_s2")
 
-team_order_desc = [
-    "阪神", "ＤｅＮＡ", "DeNA", "巨人", "中日", "広島", "ヤクルト",
-    "ソフトバンク", "日本ハム", "オリックス", "楽天", "西武", "ロッテ"
-]
-
+team_order_desc = ["阪神", "ＤｅＮＡ", "DeNA", "巨人", "中日", "広島", "ヤクルト", "ソフトバンク", "日本ハム", "オリックス", "楽天", "西武", "ロッテ"]
 def get_team_sort_key(val, is_ascending):
     val_str = str(val)
     for idx, t in enumerate(team_order_desc):
@@ -410,7 +340,6 @@ def get_team_sort_key(val, is_ascending):
 if sort_target_1 and not filtered_df.empty:
     sort_cols = []
     ascending_list = []
-
     is_asc_1 = sort_order_1.startswith("昇順")
     if sort_target_1 == "チーム":
         filtered_df["__sort_key_1"] = filtered_df["チーム"].apply(lambda x: get_team_sort_key(x, is_asc_1))
@@ -441,24 +370,18 @@ if sort_target_1 and not filtered_df.empty:
             ascending_list.append(is_asc_2)
 
     filtered_df = filtered_df.sort_values(by=sort_cols, ascending=ascending_list, na_position='last')
-
     for k in ["__sort_key_1", "__sort_key_2"]:
         if k in filtered_df.columns:
             filtered_df = filtered_df.drop(columns=[k])
 
-
-# --- 表示用のデータフレーム作成 ---
 if selected_columns:
     display_df = filtered_df[selected_columns].copy()
     for col in display_df.columns:
         display_df[col] = display_df[col].apply(lambda x: format_value(col, x))
-     
     display_df.insert(0, "No.", range(1, len(display_df) + 1))
 else:
     display_df = pd.DataFrame()
 
-
-# --- メイン画面への結果表示 ---
 st.markdown("---")
 st.subheader(f"📋 検索結果 ({len(display_df)}件)")
 
@@ -468,32 +391,20 @@ else:
     row_height = 35
     header_height = 40
     calculated_height = header_height + (len(display_df) * row_height)
-
-    st.dataframe(
-        display_df,
-        use_container_width=True,
-        height=calculated_height,
-    )
+    st.dataframe(display_df, use_container_width=True, height=calculated_height)
 
     st.markdown("---")
     st.subheader("👤 選手詳細カード")
-    selected_player = st.selectbox(
-        "詳細を確認したい選手を選択", filtered_df["選手名"].unique()
-    )
-
+    selected_player = st.selectbox("詳細を確認したい選手を選択", filtered_df["選手名"].unique())
     if selected_player:
         p_data = filtered_df[filtered_df["選手名"] == selected_player].iloc[0]
-
         cols = st.columns(3)
         with cols[0]:
             st.metric(label="選手名", value=p_data["選手名"])
             if "チーム" in p_data:
                 team_val = p_data['チーム']
                 pos_val = p_data.get('守備位置', p_data.get('守備', ''))
-                st.metric(
-                    label="チーム / 守備位置",
-                    value=f"{team_val} / {pos_val}" if pos_val else f"{team_val}",
-                )
+                st.metric(label="チーム / 守備位置", value=f"{team_val} / {pos_val}" if pos_val else f"{team_val}")
         with cols[1]:
             if "年齢" in p_data and pd.notna(p_data["年齢"]):
                 st.metric(label="年齢", value=f"{int(p_data['年齢'])}歳")
@@ -502,15 +413,6 @@ else:
         with cols[2]:
             st.write("**その他データ・成績:**")
             for col in p_data.index:
-                if col not in [
-                    "選手名",
-                    "チーム",
-                    "守備",
-                    "守備位置",
-                    "年齢",
-                    "年数",
-                    "年俸",
-                    "__西暦",
-                ]:
+                if col not in ["選手名", "チーム", "守備", "守備位置", "年齢", "年数", "年俸", "__西暦"]:
                     formatted_val = format_value(col, p_data[col])
                     st.write(f"- **{col}**: {formatted_val}")
