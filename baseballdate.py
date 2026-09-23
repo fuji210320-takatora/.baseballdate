@@ -1,13 +1,11 @@
 import pandas as pd
 
-def normalize_name(name):
-    """
-    選手名の表記揺れ（旧字体・異体字・スペース）を解消し、標準化する関数
-    """
-    if pd.isna(name):
+def normalize_player_name(name):
+    """選手名の表記揺れ（旧字体・異体字・スペース）を標準化する関数"""
+    if pd.isna(name) or not isinstance(name, str):
         return name
         
-    # 異体字・旧字体を標準的な新字体に変換するマッピング
+    # プロ野球の登録名で頻出する表記揺れ変換マップ
     kanji_mapping = str.maketrans({
         '髙': '高',
         '澤': '沢',
@@ -21,79 +19,77 @@ def normalize_name(name):
         '縣': '県',
         '眞': '真',
         '榮': '栄',
-        '德': '徳'
+        '德': '徳',
+        '嶋': '島', 
+        '彌': '弥',
+        '壽': '寿',
+        '齊': '斉',
+        '齋': '斎'
     })
     
-    # 漢字の変換に加え、姓名間の全角・半角スペースも削除して完全一致しやすくする
-    return str(name).translate(kanji_mapping).replace(" ", "").replace(" ", "")
+    # 1. 全角・半角スペースを除去（サイトによって姓名間のスペース有無が異なるため）
+    name = name.replace(" ", "").replace(" ", "")
+    
+    # 2. 異体字を新字体に変換
+    return name.translate(kanji_mapping)
 
 def main():
-    # 1. 結合前の元データ（打撃成績と守備成績）を読み込む
-    # ※ファイル名はご自身のローカルにある元データの名前に変更してください
-    try:
-        df_batting = pd.read_csv('batting_data.csv')
-        df_fielding = pd.read_csv('fielding_data.csv')
-    except FileNotFoundError:
-        print("エラー: 読み込むCSVファイルが見つかりません。ファイルパスを確認してください。")
-        return
+    # ==========================================
+    # 1. データの読み込み
+    # ==========================================
+    # ※ご自身の環境に合わせて、抽出元のCSVファイル名を指定してください
+    # df_batting = pd.read_csv('batting_raw.csv')
+    # df_fielding = pd.read_csv('fielding_raw.csv')
+    
+    # 【テスト用ダミーデータ】動作確認用
+    df_batting = pd.DataFrame({
+        'チーム': ['西武', '阪神', 'ソフトバンク'],
+        '選手名': ['滝澤 夏央', '髙寺望夢', '廣瀨 隆太'], # スペースや旧字体が混入した打撃データ
+        '打席数': [447, 331, 98],
+        'OPS': [0.674, 0.593, 0.600]
+    })
+    
+    df_fielding = pd.DataFrame({
+        'チーム': ['西武', '阪神', 'ソフトバンク'],
+        '選手名': ['滝沢夏央', '高寺望夢', '広瀬隆太'], # 新字体・スペースなしの守備データ
+        'Fielding RV(まとめ)': ['SS:2.5', '2B:1.0', '1B:-0.5'],
+        '守備イニング(SS)': [800.0, None, None],
+        '守備イニング(2B)': [None, 500.0, None],
+        '守備イニング(1B)': [None, None, 150.0]
+    })
 
-    # 2. 結合用のキーとして「選手名_標準化」カラムを両方に作成
-    df_batting['選手名_標準化'] = df_batting['選手名'].apply(normalize_name)
-    df_fielding['選手名_標準化'] = df_fielding['選手名'].apply(normalize_name)
+    # ==========================================
+    # 2. 結合用キーの作成（名寄せ処理）
+    # ==========================================
+    # 元の選手名を上書きせず、結合専用の新しいカラムを作成する
+    df_batting['選手名_結合用'] = df_batting['選手名'].apply(normalize_player_name)
+    df_fielding['選手名_結合用'] = df_fielding['選手名'].apply(normalize_player_name)
 
-    # 3. 標準化した選手名をキーにして左外部結合 (Left Join)
+    # ==========================================
+    # 3. データの結合
+    # ==========================================
+    # 同姓同名対策として、「チーム」と「標準化された選手名」の2つをキーにして結合
     df_merged = pd.merge(
         df_batting, 
         df_fielding, 
-        on='選手名_標準化', 
+        on=['チーム', '選手名_結合用'], 
         how='left',
-        suffixes=('', '_守備') # カラム名が重複した場合の接尾辞
+        suffixes=('', '_守備側') # 元から同名のカラムがあった場合に接尾辞をつける
     )
 
-    # 4. 各選手の主な守備位置を算出する関数
-    def get_primary_pos_jp(row):
-        positions = ['C', '1B', '2B', '3B', 'SS', 'LF', 'CF', 'RF']
-        jp_map = {
-            'C': '捕手', '1B': '一塁手', '2B': '二塁手', '3B': '三塁手', 
-            'SS': '遊撃手', 'LF': '左翼手', 'CF': '中堅手', 'RF': '右翼手'
-        }
-        max_inn = 0
-        prim_pos = '-'
-        for pos in positions:
-            col = f'守備イニング({pos})'
-            # カラムが存在し、かつ値が欠損していない場合
-            if col in row.index and pd.notna(row[col]):
-                try:
-                    inn = float(row[col])
-                    if inn > max_inn:
-                        max_inn = inn
-                        prim_pos = jp_map[pos]
-                except ValueError:
-                    pass
-        return prim_pos
+    # ==========================================
+    # 4. データの整理と出力
+    # ==========================================
+    # 結合用に使った一時的なカラムや、重複した選手名カラムを削除
+    if '選手名_守備側' in df_merged.columns:
+        df_merged = df_merged.drop(columns=['選手名_守備側'])
+    df_merged = df_merged.drop(columns=['選手名_結合用'])
 
-    # 結合したデータフレームに「主なポジション」カラムを追加
-    df_merged['主なポジション'] = df_merged.apply(get_primary_pos_jp, axis=1)
-
-    # 5. データ型の整理（打席数とOPSを確実に数値として扱う）
-    df_merged['打席数'] = pd.to_numeric(df_merged['打席数'], errors='coerce')
-    df_merged['OPS'] = pd.to_numeric(df_merged['OPS'], errors='coerce')
-
-    # 6. 150打席以上の野手を対象に、OPS順でトップ15を抽出
-    top_15 = df_merged[df_merged['打席数'] >= 150].sort_values(by='OPS', ascending=False).head(15)
-
-    # 7. 出力用のカラムを整理してMarkdown形式で表示
-    out_cols = ['主なポジション', '選手名', 'チーム', '試合', '打席数', '打率', '本塁打', 'OPS']
-    # 元データに存在しないカラムが指定されるエラーを防ぐ
-    out_cols = [col for col in out_cols if col in top_15.columns]
+    # 結果の表示（滝澤選手らに守備データが結びついているか確認）
+    print(df_merged)
     
-    print("--- 150打席以上 OPSトップ15（ポジション欠損修正版） ---")
-    print(top_15[out_cols].to_markdown(index=False))
-
-    # 8. 結合・修正が完了した完全版のデータをCSVとして保存
-    # 結合用の仮カラムを削除してから書き出す
-    df_merged.drop(columns=['選手名_標準化']).to_csv('fixed_export.csv', index=False, encoding='utf-8-sig')
-    print("\n※修正済みの全データを 'fixed_export.csv' として保存しました。")
+    # 修正されたデータを新しいCSVとして書き出す
+    # df_merged.to_csv('cleaned_export.csv', index=False, encoding='utf-8-sig')
 
 if __name__ == "__main__":
     main()
