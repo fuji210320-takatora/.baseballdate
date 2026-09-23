@@ -1,5 +1,6 @@
 import pandas as pd
 import streamlit as st
+import re
 
 # ページのレイアウト設定
 st.set_page_config(page_title="選手成績検索システム", layout="wide")
@@ -24,7 +25,7 @@ def load_data():
     df_pitcher = pd.read_csv(url_pitcher)
     df_batter = pd.read_csv(url_batter)
 
-    # --- 新規追加：守備成績スプレッドシートの読み込み ---
+    # --- 守備成績スプレッドシートの読み込み ---
     sheet_id_defense = "15OAG6-1-VehH05uvBk2y0xbwp5hB0zvpGvu7epVcW-c"
     defense_gids = {
         "捕手": "268651673",
@@ -43,28 +44,42 @@ def load_data():
         try:
             df_pos = pd.read_csv(url_def)
             if not df_pos.empty:
-                # 選手名カラムの特定（通常先頭付近にある想定、必要に応じて調整）
-                # ここでは列名に「選手」が含まれるか、左から2番目あたりを想定
+                # 選手名カラムの特定
                 name_col = None
                 for col in df_pos.columns:
                     if "選手" in str(col):
                         name_col = col
                         break
                 if name_col is None and len(df_pos.columns) > 0:
-                    name_col = df_pos.columns[0] # フォールバック
+                    name_col = df_pos.columns[0]
                 
-                if name_col and name_col != "選手名":
-                    df_pos = df_pos.rename(columns={name_col: "選手名"})
-                
-                # ポジョン別の守備データであることを明記するか保持
+                if name_col:
+                    # 「中島大輔Nakashima Daisuke」のような形式から日本語（漢字・かな）部分を抽出する
+                    # 例: アルファベットや記号を除外して氏名だけにする、またはローマ字の手前でスライスする
+                    def clean_player_name(val):
+                        if pd.isna(val):
+                            return ""
+                        val_str = str(val).strip()
+                        # 最初に出現するアルファベットの手前までを抽出（例: Nakashima の前まで）
+                        # または漢字・ひらがな・カタカナ部分だけを残す
+                        match = re.split(r'[A-Za-z]', val_str)
+                        if match and match[0]:
+                            return match[0].strip()
+                        return val_str
+
+                    df_pos["選手名"] = df_pos[name_col].apply(clean_player_name)
+                    # 元の選手名列が重複しないようにリネームまたはドロップ
+                    if name_col != "選手名":
+                        df_pos = df_pos.drop(columns=[name_col])
+
                 defense_dfs.append(df_pos)
         except Exception:
             pass
     
-    # 守備データを統合（複数ポジションを守る選手がいる場合は結合や集約を考慮）
+    # 守備データを統合
     if defense_dfs:
         df_defense_all = pd.concat(defense_dfs, ignore_index=True)
-        # 同一選手が複数ポジションにある場合の重複対策として、主要な守備指標をまとめるか最新を優先
+        # 同一選手が複数ポジションにある場合の重複対策（必要に応じて最初のデータを保持）
         df_defense_all = df_defense_all.drop_duplicates(subset=["選手名"], keep="first")
     else:
         df_defense_all = pd.DataFrame()
@@ -74,6 +89,14 @@ def load_data():
     # シート2・3：B列が選手名（インデックス1）
     df_pitcher = df_pitcher.rename(columns={df_pitcher.columns[1]: "選手名"})
     df_batter = df_batter.rename(columns={df_batter.columns[1]: "選手名"})
+
+    # 選手名の前後の空白などを綺麗にしておく
+    for df in [df_base, df_pitcher, df_batter]:
+        if "選手名" in df.columns:
+            df["選手名"] = df["選手名"].astype(str).str.replace(r"\s+", "", regex=True)
+    
+    if not df_defense_all.empty and "選手名" in df_defense_all.columns:
+        df_defense_all["選手名"] = df_defense_all["選手名"].astype(str).str.replace(r"\s+", "", regex=True)
 
     # --- 「年齢」の数値化 ---
     if "年齢" in df_base.columns:
@@ -119,7 +142,7 @@ def format_value(col_name, val):
     if "防御率" in col_str or "WHIP" in col_str or "FIP" in col_str:
         return f"{num:.2f}"
 
-    # Fielding RV や sUZR など（小数点第1〜2位）
+    # Fielding RV や sUZR など（小数点第1位）
     if "Fielding" in col_str or "sUZR" in col_str or "RV" in col_str:
         return f"{num:.1f}"
 
@@ -279,7 +302,7 @@ if use_birthplace_input and target_col in df_merged.columns:
     condition_groups.append((m, "AND" if "AND" in bp_logic else "OR"))
 
 
-# --- 7. 成績ベースの絞り込み（〇打席以上・〇試合以上・〇投球回以上・守備位置） ---
+# --- 7. 成績ベースの絞り込み ---
 st.sidebar.subheader("📊 規定数・ポジション絞り込み")
 if player_type == "野手成績":
     use_min_pa = st.sidebar.checkbox("打席数で絞り込む")
@@ -308,7 +331,7 @@ else:
     min_g_pit_val = st.sidebar.number_input("最小試合数（投手）", min_value=1, max_value=100, value=10, step=1)
 
 
-# --- 絞り込みロジック (ANDグループ と ORグループの分離処理) ---
+# --- 絞り込みロジック ---
 filtered_df = df_merged.copy()
 
 if condition_groups:
@@ -350,14 +373,13 @@ else:
     default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "ホールド", "セーブ", "奪三振", "WHIP", "FIP"]
     default_sort_col = "投球回"
 
-# 実際に存在するものだけをデフォルトに採用
 default_selected = [c for c in default_selected if c in all_cols]
 if not default_selected and all_cols:
     default_selected = all_cols[:5]
 
 selected_columns = st.multiselect("表示する項目を選択（複数可）", all_cols, default=default_selected)
 
-# --- 並び替え設定（第1ソート ＆ 第2ソート） ---
+# --- 並び替え設定 ---
 st.markdown("#### 🔄 並び替え条件")
 col_s1, col_s2 = st.columns(2)
 
@@ -387,12 +409,11 @@ def get_team_sort_key(val, is_ascending):
             return idx if not is_ascending else (len(team_order_desc) - 1 - idx)
     return 999
 
-# --- 並び替えの適用（マルチカラムソート） ---
+# --- 並び替えの適用 ---
 if sort_target_1 and not filtered_df.empty:
     sort_cols = []
     ascending_list = []
 
-    # 第1ソートの設定
     is_asc_1 = sort_order_1.startswith("昇順")
     if sort_target_1 == "チーム":
         filtered_df["__sort_key_1"] = filtered_df["チーム"].apply(lambda x: get_team_sort_key(x, is_asc_1))
@@ -407,7 +428,6 @@ if sort_target_1 and not filtered_df.empty:
             sort_cols.append(sort_target_1)
         ascending_list.append(is_asc_1)
 
-    # 第2ソートの設定（有効な場合のみ）
     if use_second_sort and sort_target_2:
         is_asc_2 = sort_order_2.startswith("昇順")
         if sort_target_2 == "チーム":
@@ -423,10 +443,8 @@ if sort_target_1 and not filtered_df.empty:
                 sort_cols.append(sort_target_2)
             ascending_list.append(is_asc_2)
 
-    # 実行
     filtered_df = filtered_df.sort_values(by=sort_cols, ascending=ascending_list, na_position='last')
 
-    # 一時キーの削除
     for k in ["__sort_key_1", "__sort_key_2"]:
         if k in filtered_df.columns:
             filtered_df = filtered_df.drop(columns=[k])
@@ -438,7 +456,6 @@ if selected_columns:
     for col in display_df.columns:
         display_df[col] = display_df[col].apply(lambda x: format_value(col, x))
      
-    # 1から順に並ぶ「順位」列を先頭に挿入
     display_df.insert(0, "No.", range(1, len(display_df) + 1))
 else:
     display_df = pd.DataFrame()
