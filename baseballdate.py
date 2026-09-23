@@ -42,16 +42,24 @@ def load_data():
         try:
             df_pos = pd.read_csv(url_def)
             if not df_pos.empty:
-                # 【重要追加】カラム名に含まれる「↕」「▼」「▲」などの記号を削除
+                # 【重要修正】上部のメタヘッダーをスキップし、「選手」が含まれる行を真のカラム名に設定する
+                if not any("選手" in str(c) for c in df_pos.columns):
+                    for i, row in df_pos.head(5).iterrows():
+                        if any("選手" in str(val) for val in row.values):
+                            df_pos.columns = row.astype(str)
+                            # ヘッダー行より下のデータを抽出
+                            df_pos = df_pos.iloc[i + 1:].reset_index(drop=True)
+                            break
+                
+                # カラム名から「↕」「▼」「▲」などの記号を削除
                 df_pos.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pos.columns]
 
+                # カラムの中から「選手」が含まれるものを探す
                 name_col = None
                 for col in df_pos.columns:
                     if "選手" in str(col):
                         name_col = col
                         break
-                if name_col is None and len(df_pos.columns) > 0:
-                    name_col = df_pos.columns[0]
                 
                 if name_col:
                     def clean_defense_name(val):
@@ -63,7 +71,9 @@ def load_data():
                         jp_part = match[0] if match else val_str
                         return re.sub(r'\s+', '', jp_part)
 
+                    # 正規化された選手名列を新しく作成
                     df_pos["選手名"] = df_pos[name_col].apply(clean_defense_name)
+                    # 古い「選手」列などは削除
                     if name_col != "選手名":
                         df_pos = df_pos.drop(columns=[name_col])
 
@@ -77,8 +87,8 @@ def load_data():
         # 同一選手が複数ポジションにある場合の重複対策
         df_defense_all = df_defense_all.drop_duplicates(subset=["選手名"], keep="first")
         
-        # 重複する不要な列を削除
-        cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置"]
+        # 重複する不要な列（基本データにあるもの）を削除
+        cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置", "nan"]
         df_defense_all = df_defense_all.drop(columns=[c for c in cols_to_drop if c in df_defense_all.columns])
     else:
         df_defense_all = pd.DataFrame()
