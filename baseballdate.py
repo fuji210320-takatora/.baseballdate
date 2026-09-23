@@ -53,7 +53,7 @@ def load_data():
                             df_pos = df_pos.iloc[i + 1:].reset_index(drop=True)
                             break
                 
-                # 【重要修正】改行(\n)や連続スペースを1つの半角スペースに統一してから記号を削除
+                # 改行(\n)や連続スペースを1つの半角スペースに統一してから記号を削除
                 df_pos.columns = [re.sub(r'\s+', ' ', str(c)) for c in df_pos.columns]
                 df_pos.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pos.columns]
 
@@ -210,11 +210,9 @@ else:
                             results.append(f"{pos}:{val}")
             return " / ".join(results) if results else "-"
         
-        # まとめ列の作成（データに該当の列が存在する場合のみ）
+        # まとめ列の作成（Fielding RVのみ）
         if any("Fielding RV" in c for c in df_merged.columns):
             df_merged["Fielding RV(まとめ)"] = df_merged.apply(lambda r: make_defense_summary(r, "Fielding RV"), axis=1)
-        if any("sUZR" in c for c in df_merged.columns):
-            df_merged["sUZR(まとめ)"] = df_merged.apply(lambda r: make_defense_summary(r, "sUZR"), axis=1)
     else:
         df_merged = df_temp
 
@@ -359,7 +357,8 @@ st.markdown("### ⚙️ 表示・並び替え設定")
 all_cols = [c for c in filtered_df.columns if c != "__西暦"]
 
 if player_type == "野手成績":
-    default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV(まとめ)", "sUZR(まとめ)"]
+    # デフォルトの選択肢から sUZR(まとめ) を削除
+    default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV(まとめ)"]
     default_sort_col = "安打"
 else:
     default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "ホールド", "セーブ", "奪三振", "WHIP", "FIP"]
