@@ -42,9 +42,9 @@ def load_data():
         try:
             df_pos = pd.read_csv(url_def)
             if not df_pos.empty:
-                # 【重要修正】上部のメタヘッダーをスキップし、「選手」が含まれる行を真のカラム名に設定する
+                # 上部のメタヘッダーをスキップし、「選手」が含まれる行を真のカラム名に設定する
                 if not any("選手" in str(c) for c in df_pos.columns):
-                    for i, row in df_pos.head(5).iterrows():
+                    for i, row in df_pos.head(10).iterrows(): # 念のため10行目まで検索
                         if any("選手" in str(val) for val in row.values):
                             df_pos.columns = row.astype(str)
                             # ヘッダー行より下のデータを抽出
@@ -73,23 +73,33 @@ def load_data():
 
                     # 正規化された選手名列を新しく作成
                     df_pos["選手名"] = df_pos[name_col].apply(clean_defense_name)
+                    
                     # 古い「選手」列などは削除
                     if name_col != "選手名":
                         df_pos = df_pos.drop(columns=[name_col])
 
-                defense_dfs.append(df_pos)
-        except Exception:
+                    # 重複する不要な列を削除
+                    cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置", "nan"]
+                    df_pos = df_pos.drop(columns=[c for c in cols_to_drop if c in df_pos.columns])
+
+                    # 「選手名」以外の列名に(一塁)などのポジション名を付ける
+                    rename_dict = {}
+                    for col in df_pos.columns:
+                        if col != "選手名":
+                            rename_dict[col] = f"{col}({pos_name})"
+                    df_pos = df_pos.rename(columns=rename_dict)
+
+                    defense_dfs.append(df_pos)
+        except Exception as e:
+            # ターミナルにのみエラーを出力（キャッシュ関数内でのUI表示を避けるため）
+            print(f"[{pos_name}] 守備データの読み込みエラー: {e}")
             pass
     
-    # 守備データを統合
+    # 守備データを統合（すべてのポジションデータを横に結合する）
     if defense_dfs:
-        df_defense_all = pd.concat(defense_dfs, ignore_index=True)
-        # 同一選手が複数ポジションにある場合の重複対策
-        df_defense_all = df_defense_all.drop_duplicates(subset=["選手名"], keep="first")
-        
-        # 重複する不要な列（基本データにあるもの）を削除
-        cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置", "nan"]
-        df_defense_all = df_defense_all.drop(columns=[c for c in cols_to_drop if c in df_defense_all.columns])
+        df_defense_all = defense_dfs[0]
+        for df_pos in defense_dfs[1:]:
+            df_defense_all = pd.merge(df_defense_all, df_pos, on="選手名", how="outer")
     else:
         df_defense_all = pd.DataFrame()
 
@@ -169,6 +179,28 @@ else:
     df_temp = pd.merge(df_base, df_batter, on="選手名", how="inner")
     if not df_defense.empty:
         df_merged = pd.merge(df_temp, df_defense, on="選手名", how="left")
+        
+        # 数値のあるポジションだけを抜き出して文字列にする関数
+        def make_defense_summary(row, stat_name):
+            results = []
+            positions = ["捕手", "一塁", "二塁", "三塁", "遊撃", "左翼", "中堅", "右翼"]
+            for pos in positions:
+                col = f"{stat_name}({pos})"
+                if col in row.index and pd.notna(row[col]):
+                    val = str(row[col]).strip()
+                    if val != "" and val != "nan":
+                        try:
+                            num = float(val)
+                            results.append(f"{pos}:{num:.1f}")
+                        except ValueError:
+                            results.append(f"{pos}:{val}")
+            return " / ".join(results) if results else "-"
+        
+        # まとめ列の作成（データに該当の列が存在する場合のみ）
+        if any("Fielding RV" in c for c in df_merged.columns):
+            df_merged["Fielding RV(まとめ)"] = df_merged.apply(lambda r: make_defense_summary(r, "Fielding RV"), axis=1)
+        if any("sUZR" in c for c in df_merged.columns):
+            df_merged["sUZR(まとめ)"] = df_merged.apply(lambda r: make_defense_summary(r, "sUZR"), axis=1)
     else:
         df_merged = df_temp
 
@@ -313,7 +345,7 @@ st.markdown("### ⚙️ 表示・並び替え設定")
 all_cols = [c for c in filtered_df.columns if c != "__西暦"]
 
 if player_type == "野手成績":
-    default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV", "sUZR"]
+    default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV(まとめ)", "sUZR(まとめ)"]
     default_sort_col = "安打"
 else:
     default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "ホールド", "セーブ", "奪三振", "WHIP", "FIP"]
@@ -424,5 +456,8 @@ else:
             st.write("**その他データ・成績:**")
             for col in p_data.index:
                 if col not in ["選手名", "チーム", "守備", "守備位置", "年齢", "年数", "年俸", "__西暦"]:
-                    formatted_val = format_value(col, p_data[col])
-                    st.write(f"- **{col}**: {formatted_val}")
+                    val = p_data[col]
+                    # 値が存在し、空文字や 'nan' でない場合のみ表示する
+                    if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
+                        formatted_val = format_value(col, val)
+                        st.write(f"- **{col}**: {formatted_val}")
