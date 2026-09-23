@@ -44,7 +44,7 @@ def load_data():
         try:
             df_pos = pd.read_csv(url_def)
             if not df_pos.empty:
-                # 選手名カラムの特定
+                # 選手名カラムの特定（基本的には左端にあると想定）
                 name_col = None
                 for col in df_pos.columns:
                     if "選手" in str(col):
@@ -76,7 +76,12 @@ def load_data():
     # 守備データを統合
     if defense_dfs:
         df_defense_all = pd.concat(defense_dfs, ignore_index=True)
+        # 同一選手が複数ポジションにある場合の重複対策（必要に応じて最初のデータを保持）
         df_defense_all = df_defense_all.drop_duplicates(subset=["選手名"], keep="first")
+        
+        # もし守備データ側に不要な列（例えば守備位置や年数など、ベースデータと重複するもの）があれば削除しておく
+        cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置"]
+        df_defense_all = df_defense_all.drop(columns=[c for c in cols_to_drop if c in df_defense_all.columns])
     else:
         df_defense_all = pd.DataFrame()
 
@@ -178,6 +183,8 @@ player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成
 if player_type == "投手成績":
     df_merged = pd.merge(df_base, df_pitcher, on="選手名", how="inner")
 else:
+    # 野手成績の場合は、基本データ + 野手データ + 守備データを結合
+    # how="left" とすることで、ベースの野手は必ず残り、守備データがある人だけ結合される
     df_temp = pd.merge(df_base, df_batter, on="選手名", how="inner")
     if not df_defense.empty:
         df_merged = pd.merge(df_temp, df_defense, on="選手名", how="left")
@@ -204,9 +211,12 @@ st.sidebar.subheader("👤 選手名")
 search_name = st.sidebar.text_input("選手名（部分一致）", "", key="m_name")
 name_logic = st.sidebar.radio("選手名の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_name", horizontal=True)
 if search_name:
-    m = df_merged["選手名"].str.contains(search_name, na=False)
+    # スペースを取り除いた検索クエリで比較（ユーザーがスペースを入れて検索してもヒットしやすくする）
+    clean_search = search_name.replace(" ", "").replace(" ", "")
+    m = df_merged["選手名"].str.contains(clean_search, na=False)
     condition_groups.append((m, "AND" if "AND" in name_logic else "OR"))
 
+# --- (中略：年齢、年数、生まれ年、出身地のサイドバー設定は省略せずにそのまま) ---
 # --- 3. 年齢条件 ---
 st.sidebar.subheader("🎂 年齢")
 use_age_input = st.sidebar.checkbox("年齢条件を有効にする", key="c_age")
@@ -349,9 +359,13 @@ else:
 
 # --- メイン画面：表示項目・並び替え設定エリア ---
 st.markdown("### ⚙️ 表示・並び替え設定")
+
+# 結合後のデータフレーム（filtered_df）からカラム一覧を取得するため、
+# 守備データがマージできていれば、必ずここに「Fielding RV」などが含まれます。
 all_cols = [c for c in filtered_df.columns if c != "__西暦"]
 
 if player_type == "野手成績":
+    # 守備指標もデフォルト表示に設定
     default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV", "sUZR"]
     default_sort_col = "安打"
 else:
