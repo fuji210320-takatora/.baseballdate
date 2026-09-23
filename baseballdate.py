@@ -37,6 +37,8 @@ def load_data():
     }
 
     defense_dfs = []
+    loaded_positions = []  # 読み込めたポジションを記録するリスト
+
     for pos_name, gid in defense_gids.items():
         url_def = f"https://docs.google.com/spreadsheets/d/{sheet_id_defense}/gviz/tq?tqx=out:csv&gid={gid}"
         try:
@@ -51,7 +53,8 @@ def load_data():
                             df_pos = df_pos.iloc[i + 1:].reset_index(drop=True)
                             break
                 
-                # カラム名から「↕」「▼」「▲」などの記号を削除
+                # 【重要修正】改行(\n)や連続スペースを1つの半角スペースに統一してから記号を削除
+                df_pos.columns = [re.sub(r'\s+', ' ', str(c)) for c in df_pos.columns]
                 df_pos.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pos.columns]
 
                 # カラムの中から「選手」が含まれるものを探す
@@ -90,8 +93,9 @@ def load_data():
                     df_pos = df_pos.rename(columns=rename_dict)
 
                     defense_dfs.append(df_pos)
+                    loaded_positions.append(pos_name) # 成功したポジションを記録
         except Exception as e:
-            # ターミナルにのみエラーを出力（キャッシュ関数内でのUI表示を避けるため）
+            # ターミナルにのみエラーを出力
             print(f"[{pos_name}] 守備データの読み込みエラー: {e}")
             pass
     
@@ -124,7 +128,8 @@ def load_data():
         df_base["年数"] = df_base["年数"].astype(str).str.replace("年目", "", regex=False).str.replace("年", "", regex=False).str.strip()
         df_base["年数"] = pd.to_numeric(df_base["年数"], errors="coerce")
 
-    return df_base, df_pitcher, df_batter, df_defense_all
+    # loaded_positions も返すように変更
+    return df_base, df_pitcher, df_batter, df_defense_all, loaded_positions
 
 
 def format_value(col_name, val):
@@ -160,16 +165,25 @@ def format_value(col_name, val):
 
 
 try:
-    df_base, df_pitcher, df_batter, df_defense = load_data()
+    df_base, df_pitcher, df_batter, df_defense, loaded_positions = load_data()
 except Exception as e:
     st.error(f"データの読み込みに失敗しました。\nエラー内容: {e}")
     st.stop()
 
+
+# --- サイドバー設定 ---
 st.sidebar.header("🔍 検索・絞り込み条件")
 if st.sidebar.button("🔄 データを最新に更新（キャッシュクリア）"):
     st.cache_data.clear()
     st.success("キャッシュをクリアしました！")
     st.rerun()
+
+# どの守備データが読み込めたかをUIでフィードバック
+if loaded_positions:
+    st.sidebar.success(f"✅ 守備データ読込完了: {', '.join(loaded_positions)}")
+else:
+    st.sidebar.error("❌ 守備データが一つも読み込めませんでした")
+
 
 player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成績"])
 
