@@ -24,16 +24,17 @@ def load_data():
     df_batter = pd.read_csv(url_batter)
 
     # --- 守備成績スプレッドシートの読み込み ---
+    # ポジション名を英字略称に変更
     sheet_id_defense = "15OAG6-1-VehH05uvBk2y0xbwp5hB0zvpGvu7epVcW-c"
     defense_gids = {
-        "捕手": "268651673",
-        "一塁": "2086594429",
-        "二塁": "505305239",
-        "三塁": "2096599227",
-        "遊撃": "1958929802",
-        "左翼": "48917827",
-        "中堅": "810163329",
-        "右翼": "1692410818"
+        "C": "268651673",
+        "1B": "2086594429",
+        "2B": "505305239",
+        "3B": "2096599227",
+        "SS": "1958929802",
+        "LF": "48917827",
+        "CF": "810163329",
+        "RF": "1692410818"
     }
 
     defense_dfs = []
@@ -85,7 +86,7 @@ def load_data():
                     cols_to_drop = ["年", "球団", "Age", "プロ年数", "助っ人", "新人王資格", "守備位置", "nan"]
                     df_pos = df_pos.drop(columns=[c for c in cols_to_drop if c in df_pos.columns])
 
-                    # 「選手名」以外の列名に(一塁)などのポジション名を付ける
+                    # 「選手名」以外の列名に(1B)などの英字ポジション名を付ける
                     rename_dict = {}
                     for col in df_pos.columns:
                         if col != "選手名":
@@ -128,7 +129,6 @@ def load_data():
         df_base["年数"] = df_base["年数"].astype(str).str.replace("年目", "", regex=False).str.replace("年", "", regex=False).str.strip()
         df_base["年数"] = pd.to_numeric(df_base["年数"], errors="coerce")
 
-    # loaded_positions も返すように変更
     return df_base, df_pitcher, df_batter, df_defense_all, loaded_positions
 
 
@@ -194,10 +194,10 @@ else:
     if not df_defense.empty:
         df_merged = pd.merge(df_temp, df_defense, on="選手名", how="left")
         
-        # 数値のあるポジションだけを抜き出して文字列にする関数
+        # 数値のあるポジションだけを抜き出して文字列にする関数（英字略称版）
         def make_defense_summary(row, stat_name):
             results = []
-            positions = ["捕手", "一塁", "二塁", "三塁", "遊撃", "左翼", "中堅", "右翼"]
+            positions = ["C", "1B", "2B", "3B", "SS", "LF", "CF", "RF"]
             for pos in positions:
                 col = f"{stat_name}({pos})"
                 if col in row.index and pd.notna(row[col]):
