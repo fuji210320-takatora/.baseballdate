@@ -26,6 +26,15 @@ def load_data():
     df_pitcher = pd.read_csv(url_pitcher)
     df_batter = pd.read_csv(url_batter)
 
+    # 選手名を綺麗にする共通関数（守備・球種データ用）
+    def clean_name_str(val):
+        if pd.isna(val):
+            return ""
+        val_str = str(val).strip()
+        match = re.split(r'[A-Za-zＡ-Ｚａ-ｚ]', val_str)
+        jp_part = match[0] if match else val_str
+        return re.sub(r'\s+', '', jp_part)
+
     # --- 守備成績スプレッドシートの読み込み ---
     sheet_id_defense = "15OAG6-1-VehH05uvBk2y0xbwp5hB0zvpGvu7epVcW-c"
     defense_gids = {
@@ -57,23 +66,10 @@ def load_data():
                 df_pos.columns = [re.sub(r'\s+', ' ', str(c)) for c in df_pos.columns]
                 df_pos.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pos.columns]
 
-                name_col = None
-                for col in df_pos.columns:
-                    if "選手" in str(col):
-                        name_col = col
-                        break
+                name_col = next((c for c in df_pos.columns if "選手" in str(c)), None)
                 
                 if name_col:
-                    def clean_defense_name(val):
-                        if pd.isna(val):
-                            return ""
-                        val_str = str(val).strip()
-                        match = re.split(r'[A-Za-zＡ-Ｚａ-ｚ]', val_str)
-                        jp_part = match[0] if match else val_str
-                        return re.sub(r'\s+', '', jp_part)
-
-                    df_pos["選手名"] = df_pos[name_col].apply(clean_defense_name)
-                    
+                    df_pos["選手名"] = df_pos[name_col].apply(clean_name_str)
                     if name_col != "選手名":
                         df_pos = df_pos.drop(columns=[name_col])
 
@@ -83,10 +79,7 @@ def load_data():
                     df_pos = df_pos.replace([r'^\s*$', r'^\s*-\s*$', 'NaN', 'nan'], pd.NA, regex=True)
                     df_pos = df_pos.dropna(axis=1, how='all')
 
-                    rename_dict = {}
-                    for col in df_pos.columns:
-                        if col != "選手名":
-                            rename_dict[col] = f"{col}({pos_name})"
+                    rename_dict = {col: f"{col}({pos_name})" for col in df_pos.columns if col != "選手名"}
                     df_pos = df_pos.rename(columns=rename_dict)
 
                     defense_dfs.append(df_pos)
@@ -102,14 +95,51 @@ def load_data():
     else:
         df_defense_all = pd.DataFrame()
 
+
+    # --- 【新規】球種別データ (Pitch Type) の読み込み ---
+    # gid=0 のシートを読み込む
+    gid_pitch_type = "0"
+    url_pitch_type = f"https://docs.google.com/spreadsheets/d/{sheet_id_defense}/gviz/tq?tqx=out:csv&gid={gid_pitch_type}"
+    
+    df_pitch_type = pd.DataFrame()
+    is_pitch_type_loaded = False
+    try:
+        df_pt = pd.read_csv(url_pitch_type)
+        if not df_pt.empty:
+            # 守備データと同様にメタヘッダーをスキップ
+            if not any("選手" in str(c) for c in df_pt.columns):
+                for i, row in df_pt.head(10).iterrows(): 
+                    if any("選手" in str(val) for val in row.values):
+                        df_pt.columns = row.astype(str)
+                        df_pt = df_pt.iloc[i + 1:].reset_index(drop=True)
+                        break
+            
+            # 見出しの記号（↕▼▲）を削除
+            df_pt.columns = [re.sub(r'\s+', ' ', str(c)) for c in df_pt.columns]
+            df_pt.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pt.columns]
+
+            pt_name_col = next((c for c in df_pt.columns if "選手" in str(c)), None)
+            
+            if pt_name_col:
+                # 選手名の不要文字削除と旧字体の標準化を適用
+                df_pt["選手名"] = df_pt[pt_name_col].apply(clean_name_str).str.replace(r'\s+', '', regex=True).str.translate(KANJI_MAP)
+                
+                # 不要な重複列を削除（表示時にすっきりさせるため）
+                cols_to_drop_pt = [pt_name_col, "年度", "年", "球団", "Age"]
+                df_pitch_type = df_pt.drop(columns=[c for c in cols_to_drop_pt if c in df_pt.columns])
+                is_pitch_type_loaded = True
+    except Exception as e:
+        print(f"球種別データの読み込みエラー: {e}")
+        pass
+
+
+    # --- 基本データの列名変更と選手名の標準化 ---
     df_base = df_base.rename(columns={df_base.columns[2]: "選手名"})
     df_pitcher = df_pitcher.rename(columns={df_pitcher.columns[1]: "選手名"})
     df_batter = df_batter.rename(columns={df_batter.columns[1]: "選手名"})
 
-    # --- 【重要】選手名のスペース削除 ＋ 旧字体の統一化 ---
     for df in [df_base, df_pitcher, df_batter]:
         if "選手名" in df.columns:
-            # スペースを消した上で、KANJI_MAPに従って「澤→沢」「髙→高」などに変換
             df["選手名"] = df["選手名"].astype(str).str.replace(r'\s+', '', regex=True).str.translate(KANJI_MAP)
     
     if not df_defense_all.empty and "選手名" in df_defense_all.columns:
@@ -123,7 +153,7 @@ def load_data():
         df_base["年数"] = df_base["年数"].astype(str).str.replace("年目", "", regex=False).str.replace("年", "", regex=False).str.strip()
         df_base["年数"] = pd.to_numeric(df_base["年数"], errors="coerce")
 
-    return df_base, df_pitcher, df_batter, df_defense_all, loaded_positions
+    return df_base, df_pitcher, df_batter, df_defense_all, loaded_positions, df_pitch_type, is_pitch_type_loaded
 
 
 def format_value(col_name, val):
@@ -159,7 +189,7 @@ def format_value(col_name, val):
 
 
 try:
-    df_base, df_pitcher, df_batter, df_defense, loaded_positions = load_data()
+    df_base, df_pitcher, df_batter, df_defense, loaded_positions, df_pitch_type, is_pitch_type_loaded = load_data()
 except Exception as e:
     st.error(f"データの読み込みに失敗しました。\nエラー内容: {e}")
     st.stop()
@@ -172,10 +202,14 @@ if st.sidebar.button("🔄 データを最新に更新（キャッシュクリ�
     st.success("キャッシュをクリアしました！")
     st.rerun()
 
-if loaded_positions:
-    st.sidebar.success(f"✅ 守備データ読込完了: {', '.join(loaded_positions)}")
+# 読込状況のフィードバック
+if loaded_positions or is_pitch_type_loaded:
+    msg = []
+    if is_pitch_type_loaded: msg.append("⚾球種データ")
+    if loaded_positions: msg.append(f"🛡️守備({','.join(loaded_positions)})")
+    st.sidebar.success(f"✅ 拡張データ読込完了:\n" + "\n".join(msg))
 else:
-    st.sidebar.error("❌ 守備データが一つも読み込めませんでした")
+    st.sidebar.warning("⚠️ 守備・球種データの読み込みに失敗しました")
 
 
 player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成績"])
@@ -225,7 +259,6 @@ st.sidebar.subheader("👤 選手名")
 search_name = st.sidebar.text_input("選手名（部分一致）", "", key="m_name")
 name_logic = st.sidebar.radio("選手名の結合", ["AND（絶対満たす）", "OR（どちらか）"], key="l_name", horizontal=True)
 if search_name:
-    # --- 【重要】検索キーワードも旧字体を標準化 ---
     clean_search = search_name.replace(" ", "").replace(" ", "").translate(KANJI_MAP)
     m = df_merged["選手名"].str.contains(clean_search, na=False)
     condition_groups.append((m, "AND" if "AND" in name_logic else "OR"))
@@ -456,6 +489,7 @@ else:
                 st.metric(label="年齢", value=f"{int(p_data['年齢'])}歳")
             if "年数" in p_data and pd.notna(p_data["年数"]):
                 st.metric(label="プロ入り年数", value=f"{int(p_data['年数'])}年目")
+        
         with cols[2]:
             st.write("**その他データ・成績:**")
             for col in p_data.index:
@@ -464,3 +498,12 @@ else:
                     if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
                         formatted_val = format_value(col, val)
                         st.write(f"- **{col}**: {formatted_val}")
+                        
+        # --- 【新規】球種データの表示セクション ---
+        if player_type == "投手成績" and is_pitch_type_loaded and not df_pitch_type.empty:
+            p_pitch_df = df_pitch_type[df_pitch_type["選手名"] == selected_player]
+            if not p_pitch_df.empty:
+                st.markdown("#### ⚾ 球種別データ")
+                # 画面表示用に「選手名」列を除外して美しく表示
+                disp_pitch = p_pitch_df.drop(columns=["選手名"])
+                st.dataframe(disp_pitch, hide_index=True, use_container_width=True)
