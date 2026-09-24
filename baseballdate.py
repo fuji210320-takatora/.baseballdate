@@ -97,7 +97,6 @@ def load_data():
 
 
     # --- 【新規】球種別データ (Pitch Type) の読み込み ---
-    # gid=0 のシートを読み込む
     gid_pitch_type = "0"
     url_pitch_type = f"https://docs.google.com/spreadsheets/d/{sheet_id_defense}/gviz/tq?tqx=out:csv&gid={gid_pitch_type}"
     
@@ -106,7 +105,6 @@ def load_data():
     try:
         df_pt = pd.read_csv(url_pitch_type)
         if not df_pt.empty:
-            # 守備データと同様にメタヘッダーをスキップ
             if not any("選手" in str(c) for c in df_pt.columns):
                 for i, row in df_pt.head(10).iterrows(): 
                     if any("選手" in str(val) for val in row.values):
@@ -114,17 +112,14 @@ def load_data():
                         df_pt = df_pt.iloc[i + 1:].reset_index(drop=True)
                         break
             
-            # 見出しの記号（↕▼▲）を削除
             df_pt.columns = [re.sub(r'\s+', ' ', str(c)) for c in df_pt.columns]
             df_pt.columns = [re.sub(r'[↕▼▲]', '', str(c)).strip() for c in df_pt.columns]
 
             pt_name_col = next((c for c in df_pt.columns if "選手" in str(c)), None)
             
             if pt_name_col:
-                # 選手名の不要文字削除と旧字体の標準化を適用
                 df_pt["選手名"] = df_pt[pt_name_col].apply(clean_name_str).str.replace(r'\s+', '', regex=True).str.translate(KANJI_MAP)
                 
-                # 不要な重複列を削除（表示時にすっきりさせるため）
                 cols_to_drop_pt = [pt_name_col, "年度", "年", "球団", "Age"]
                 df_pitch_type = df_pt.drop(columns=[c for c in cols_to_drop_pt if c in df_pt.columns])
                 is_pitch_type_loaded = True
@@ -202,7 +197,6 @@ if st.sidebar.button("🔄 データを最新に更新（キャッシュクリ�
     st.success("キャッシュをクリアしました！")
     st.rerun()
 
-# 読込状況のフィードバック
 if loaded_positions or is_pitch_type_loaded:
     msg = []
     if is_pitch_type_loaded: msg.append("⚾球種データ")
@@ -216,6 +210,46 @@ player_type = st.sidebar.radio("表示カテゴリ", ["投手成績", "野手成
 
 if player_type == "投手成績":
     df_merged = pd.merge(df_base, df_pitcher, on="選手名", how="inner")
+    
+    # --- 【新規】球種別データをメイン表にまとめる処理 ---
+    if is_pitch_type_loaded and not df_pitch_type.empty:
+        pt_col = next((c for c in df_pitch_type.columns if "球種" in str(c)), None)
+        if pt_col:
+            # 扱いやすいように列名を固定
+            df_pitch_type = df_pitch_type.rename(columns={pt_col: "球種"})
+            # まとめる対象の指標リスト（選手名と球種以外すべて）
+            metrics_to_summarize = [c for c in df_pitch_type.columns if c not in ["選手名", "球種"]]
+            
+            summary_rows = []
+            # 選手ごとにグループ化して、球種をつなげた文字列を作成
+            for player, group in df_pitch_type.groupby("選手名"):
+                row_dict = {"選手名": player}
+                for metric in metrics_to_summarize:
+                    parts = []
+                    for _, row in group.iterrows():
+                        pitch = str(row["球種"]) if pd.notna(row["球種"]) else "不明"
+                        val = row[metric]
+                        if pd.notna(val) and str(val).strip() != "" and str(val).strip().lower() != "nan":
+                            try:
+                                num = float(val)
+                                if "wOBA" in metric:
+                                    fmt = f"{num:.3f}"
+                                    if fmt.startswith("0"): fmt = fmt[1:] # 0.xxx -> .xxx
+                                    parts.append(f"{pitch}:{fmt}")
+                                elif metric == "#" or num.is_integer():
+                                    parts.append(f"{pitch}:{int(num)}")
+                                else:
+                                    parts.append(f"{pitch}:{num:.1f}")
+                            except ValueError:
+                                parts.append(f"{pitch}:{val}")
+                    row_dict[f"{metric}(球種)"] = " / ".join(parts) if parts else "-"
+                summary_rows.append(row_dict)
+            
+            # 作成したまとめデータをメインデータに結合
+            if summary_rows:
+                df_pitch_summary = pd.DataFrame(summary_rows)
+                df_merged = pd.merge(df_merged, df_pitch_summary, on="選手名", how="left")
+
 else:
     df_temp = pd.merge(df_base, df_batter, on="選手名", how="inner")
     if not df_defense.empty:
@@ -385,7 +419,8 @@ if player_type == "野手成績":
     default_selected = ["選手名", "チーム", "試合", "打席数", "打率", "安打", "本塁打", "盗塁", "出塁率", "OPS", "Fielding RV(まとめ)"]
     default_sort_col = "安打"
 else:
-    default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "ホールド", "セーブ", "奪三振", "WHIP", "FIP"]
+    # --- 【新規】投手はデフォルトで球種データの一部を最初から表示する ---
+    default_selected = ["選手名", "チーム", "試合", "投球回", "防御率", "勝利", "敗北", "セーブ", "奪三振", "WHIP", "%(球種)", "Whiff%(球種)", "wOBA(球種)"]
     default_sort_col = "投球回"
 
 default_selected = [c for c in default_selected if c in all_cols]
@@ -499,11 +534,9 @@ else:
                         formatted_val = format_value(col, val)
                         st.write(f"- **{col}**: {formatted_val}")
                         
-        # --- 【新規】球種データの表示セクション ---
         if player_type == "投手成績" and is_pitch_type_loaded and not df_pitch_type.empty:
             p_pitch_df = df_pitch_type[df_pitch_type["選手名"] == selected_player]
             if not p_pitch_df.empty:
                 st.markdown("#### ⚾ 球種別データ")
-                # 画面表示用に「選手名」列を除外して美しく表示
                 disp_pitch = p_pitch_df.drop(columns=["選手名"])
                 st.dataframe(disp_pitch, hide_index=True, use_container_width=True)
